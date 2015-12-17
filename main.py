@@ -5,6 +5,7 @@ from collections import defaultdict
 from os import listdir
 from os.path import isfile,join,basename,splitext
 import shutil
+from operator import itemgetter, attrgetter, methodcaller
 
 
 #with open('input_short.json') as data_file:
@@ -17,6 +18,329 @@ import shutil
 directory = "data"
 TRAIN_DIR = "train"
 TEST_DIR = "test"
+BATCH_SIZE = 10000
+MAX_JSON_LINES = 5000
+CATKEY = "categorykey"
+EXPECTED_CATKEY = "expected_categorykey"
+EQUAL = "equal"
+MAINCAT_ORIG = "maincategory_original"
+CAT_ORIG = "category_original"
+SUBCAT_ORIG = "subcategory_original"
+SOURCENAME = "sourcename"
+DEFAULT_MISSING = "### MISSING ###"
+IDS_FILENAME = "ids.txt"
+RESULTS_FILENAME = "results.txt"
+AMONG_TOP = "among_top"
+ID = "id"
+DATA = "data"
+TOP_SCORE = "top_score"
+TOP_RESULTS = "top_results"
+PROCESSED_SUFFIX = "_processed"
+TRAINTEST_SUFFIX = "_traintest"
+MAX_TRAIN_SET = 5
+SHINGLE_SIZE = 7
+#THRESHOLD_LIST = [10, 50]
+THRESHOLD_USED = "threshold_used"
+#THRESHOLD_LIST = [1, 5, 10, 50, 100, 500]
+THRESHOLD_LIST = [30]
+#THRESHOLD_LIST = [2, 5, 10, 20, 50,100, 200, 500]
+
+# Returns processed folder
+def getProcessedFolder(inputFolder):
+    return inputFolder + PROCESSED_SUFFIX
+
+# Returns traintest folder
+def getTrainTestFolder(inputFolder):
+    return inputFolder + TRAINTEST_SUFFIX
+
+def getIdsFile(inputFolder):
+    return "%s/%s" % (getProcessedFolder(inputFolder), IDS_FILENAME)
+
+# Split input folder according identifiers (soucename, maincategory_original, scategory_original, subcategory_original): 
+def splitInput(inputFolder):
+    d = {}
+    inputFolderProcessed = getProcessedFolder(inputFolder)
+    if os.path.exists(inputFolderProcessed):
+        shutil.rmtree(inputFolderProcessed)
+    onlyfiles = [ filename for filename in listdir(inputFolder) if isfile(join(inputFolder,filename)) ]
+    dct_id = {}
+    for filename in onlyfiles:
+        fullpath = inputFolder + "/" + filename
+        print "processing file " + fullpath
+        with open(fullpath) as f:
+            buff = []
+            for line in f:
+                if len(buff) < BATCH_SIZE:
+                    buff.append(line)
+                else:
+                    processBatch(buff, inputFolderProcessed, dct_id)
+                    buff = []
+            processBatch(buff, inputFolderProcessed, dct_id)
+    print "number of category tuples is %s" % len(dct_id.keys())
+    idsFile = getIdsFile(inputFolder)
+    with open(idsFile, 'w') as f:
+        f.write("%s" % json.dumps(dct_id))
+
+# Get hash of ad identifier
+def getUid(sourcename, maincategory, category, subcategory):
+    return hash(sourcename + maincategory + category + subcategory) & 0xffffffff
+
+# Returns dictionary with ads identifiers
+def getDict(uid, sourcename, maincategory, category, subcategory, categorykey):
+    dct = {}
+    data = {}
+    dct[ID] = uid
+    data[ID] = uid
+    data[SOURCENAME] = sourcename
+    data[MAINCAT_ORIG] = maincategory
+    data[CAT_ORIG] = category
+    data[SUBCAT_ORIG] = subcategory
+    data[CATKEY] = categorykey
+    dct[DATA] = data
+    return dct
+
+# Process serialized json lines
+def processBatch(lines, folder, dct_id):
+    dct_data = {}
+    for line in lines:
+        json_line = json.loads(line)
+        catkey = json_line.get(CATKEY, DEFAULT_MISSING)
+        maincategory = json_line.get(MAINCAT_ORIG, DEFAULT_MISSING)
+        category = json_line.get(CAT_ORIG, DEFAULT_MISSING)
+        subcategory = json_line.get(SUBCAT_ORIG, DEFAULT_MISSING)
+        sourcename = json_line.get(SOURCENAME, DEFAULT_MISSING)
+
+        uid = getUid(sourcename, maincategory, category, subcategory)
+        dct = getDict(uid, sourcename, maincategory, category, subcategory, catkey)
+        dct_id[dct[ID]] = dct[DATA]
+        if not dct_data.has_key(dct[ID]):
+            dct_data[dct[ID]] = []
+        dct_data[dct[ID]].append(line)
+    for item in dct_data.items():
+        uid = item[0]
+        dataList = item[1]
+        dirname = folder
+        filename = str(uid) + ".txt"
+        saveSerializedJson(dirname, filename, dataList)
+
+# Saves serialized json lines
+def saveSerializedJson(dirname, filename, list):
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    path = "%s/%s" % (dirname, filename)
+    with open(path, 'a') as f:
+        for item in list:
+            f.write("%s" % item)
+
+# Returns dictionary with category tuples
+def getIdsDict(inputFolder):
+    idsFile = getIdsFile(inputFolder)
+    with open(idsFile, 'r') as f:
+        return json.loads(f.read())
+
+# Split processed dataset to train and test set
+# testSourcenames contains list of sources, which data are used for training
+def splitToTrainTest(inputFolder, trainSourcenames):
+    traintestFolder = getTrainTestFolder(inputFolder)
+    trainFolder = traintestFolder + "/" + TRAIN_DIR
+    testFolder = traintestFolder + "/" + TEST_DIR
+    processedFolder = getProcessedFolder(inputFolder)
+    if os.path.exists(traintestFolder):
+        shutil.rmtree(traintestFolder)
+    os.makedirs(traintestFolder)
+    os.makedirs(trainFolder)
+    os.makedirs(testFolder)
+    dct_id = getIdsDict(inputFolder)
+    for item in dct_id.items():
+        #print processedFolder + "/" + item[0] + ".txt"
+        filename = item[0] + ".txt"
+        filepath = processedFolder + "/" + filename
+        if item[1][SOURCENAME] in trainSourcenames:
+            processTrainFile(inputFolder, item[0], dct_id)
+        else:
+            dstFilepath = testFolder + "/" + filename
+            shutil.copyfile(filepath, dstFilepath)
+
+# Create train set with files named by catkeys
+def processTrainFile(inputFolder, uid, dct_id):
+    trainFolder = getTrainTestFolder(inputFolder) + "/" + TRAIN_DIR
+    filepath = getProcessedFolder(inputFolder) + "/" + uid + ".txt"
+    catkey = dct_id[uid][CATKEY]
+    dstFilepath = trainFolder + "/" + catkey + ".txt"
+    with open(filepath, 'r') as f:
+        with open(dstFilepath, 'a') as g:
+            g.write("%s" % f.read())
+
+# Returns list of train categories <category, filepath>
+def getCategoriesDict(inputFolder, trainSourcenames):
+    dct_id = getIdsDict(inputFolder)
+    categories = {}
+    trainFolder = getTrainTestFolder(inputFolder) + "/" + TRAIN_DIR
+    for item in dct_id.items():
+        catkey = item[1][CATKEY]
+        sourcename = item[1][SOURCENAME]
+        if sourcename in trainSourcenames:
+            categories[catkey] = trainFolder + "/" + catkey + ".txt"
+    return categories
+
+# Returs dictionary with test files <uid, filepath>
+def getTestFiles(inputFolder, trainSourcenames):
+    dct_id = getIdsDict(inputFolder)
+    testFiles = {}
+    testFolder = getTrainTestFolder(inputFolder) + "/" + TEST_DIR
+    for item in dct_id.items():
+        uid = item[0]
+        sourcename = item[1][SOURCENAME]
+        if not sourcename in trainSourcenames:
+            testFiles[uid] = testFolder + "/" + uid + ".txt"
+    return testFiles
+
+# Reads json file to list
+def readJson(jsonFile):
+    d = []
+    maxLines = MAX_JSON_LINES
+    with open(jsonFile) as f:
+        for i,line in enumerate(f):
+            if (i < maxLines):
+                d.append(json.loads(line))
+#        for line in f:
+#            d.append(json.loads(line))
+    return d;
+
+# Extracts sets from trainSet
+def extractTrainSet(inputFolder, thresholdsList, trainSourcenames):
+    categories = getCategoriesDict(inputFolder, trainSourcenames)
+    testFiles = getTestFiles(inputFolder, trainSourcenames)
+    trainData = {}
+    for item in categories.items():
+        print "extraction from " + item[0]
+        thresholds = {}
+        json_list = readJson(item[1])
+        for t in thresholdsList:
+            t_int = int(t)
+            trainList = [i for i in range(0, min(t_int*(MAX_TRAIN_SET), len(json_list)) - t_int, t_int)]
+            if len(trainList) >= 1:
+                sets = []
+                for index in trainList:
+                    sets.append(getSet(json_list[i:i+t_int]))
+                thresholds[t] = sets
+        trainData[item[0]] = thresholds
+    return trainData
+
+# get biggest item which is in both lists
+def chooseMaxThresholdSize(list1, list2):
+    maxItem = 0
+    for item in list1:
+        if (item in list2) & (item > maxItem):
+            maxItem = item
+    return maxItem
+
+# Returns shingles of desired size
+def shingling(text, shingleLength):
+    tokens_desc = [text[i:i+shingleLength] for i in range(len(text) - shingleLength + 1) if len(text[i]) < shingleLength + 1]
+    return tokens_desc
+
+# get set of shingles coded to integers
+def getSet(d):
+    hash_set = set()
+    shingleLength = SHINGLE_SIZE
+    for i in range(0,len(d)):
+        tokens = []
+        if "ad__headline" in d[i].keys():
+            tokens = shingling(d[i]["ad__headline"], shingleLength)
+        if "ad__description" in d[i].keys():
+            tokens += shingling(d[i]["ad__description"], shingleLength)
+        hashes = [hash(token) & 0xffffffff for token in tokens]
+        hash_set.update(hashes)
+    return hash_set
+
+# Returns jaccard similarity between 2 sets
+def jac(set1, set2):
+    unionLength = len(set1 | set2)
+    if unionLength == 0:
+        return 0
+    return float(len(set1 & set2)) / unionLength
+
+# returns score which is average of scores of multiple subsets
+def getScore(listSet1, listSet2):
+    count = 0
+    simSum = 0
+    for itemSet1 in listSet1:
+        for itemSet2 in listSet2:
+            #MAX
+            #score = jac(itemSet1, itemSet2)
+            #count = 1
+            #if (score > simSum):
+            #    simSum = score
+            #AVG
+            simSum += jac(itemSet1, itemSet2)
+            count += 1
+    return float(simSum / count)
+
+
+def getTestTrainResults(inputFolder, thresholdsList, trainSourcenames):
+    trainData = extractTrainSet(inputFolder, thresholdsList, trainSourcenames)
+    testFiles = getTestFiles(inputFolder, trainSourcenames)
+    trainTestFolder = getTrainTestFolder(inputFolder)
+    dct_id = getIdsDict(inputFolder)
+    
+    resultsFilepath = trainTestFolder + "/" + RESULTS_FILENAME
+    if os.path.exists(resultsFilepath):
+        os.remove(resultsFilepath)
+
+    result_dict = {}
+    for testItem in testFiles.items():
+        thresholds = {}
+        json_list = readJson(testItem[1])
+        for t in thresholdsList:
+            t_int = int(t)
+            testList = [i for i in range(0, min(t_int*(MAX_TRAIN_SET), len(json_list)) - t_int, t_int)]
+            if len(testList) >= 1:
+                sets = []
+                for index in testList:
+                    sets.append(getSet(json_list[i:i+t_int]))
+                thresholds[t] = sets
+        scores = []
+        for trainItem in trainData.items():
+            maxThreshold = chooseMaxThresholdSize(thresholds.keys(), trainItem[1].keys())
+            if (maxThreshold == 0):
+                # score 0
+                #tup = (trainItem[0], 0);
+                #scores.append(tup)
+                continue
+            trainSets = trainItem[1][maxThreshold]
+            testSets = thresholds[maxThreshold]
+            score = getScore(trainSets, testSets)
+            tup = (trainItem[0], score, maxThreshold);
+            scores.append(tup)
+        MAX_RESULTS = 5
+        topResults = sorted(scores, key=itemgetter(1), reverse=True)[0:MAX_RESULTS]
+
+        results = {}
+        results[ID] = testItem[0]
+        results[EXPECTED_CATKEY] = dct_id[testItem[0]][CATKEY]
+        if len(topResults) == 0:
+            results[CATKEY] = "N/A"
+            results[THRESHOLD_USED] = -1
+            results[TOP_SCORE] = -1
+            results[AMONG_TOP] = False
+        else:
+            results[CATKEY] = topResults[0][0]
+            results[TOP_SCORE] = topResults[0][1]
+            results[THRESHOLD_USED] = topResults[0][2]
+            results[TOP_RESULTS] = topResults
+            top_categories = [x[0] for x in topResults]
+            results[AMONG_TOP] = results[EXPECTED_CATKEY] in top_categories
+        results[EQUAL] = results[CATKEY] == results[EXPECTED_CATKEY]
+        result_dict[testItem[0]] = results
+        with open(resultsFilepath, 'a') as f:
+            f.write("%s\n" % json.dumps(results))
+        if results[CATKEY] == "N/A":
+            continue
+        else:
+            tup = (results[EQUAL], results[AMONG_TOP], results[THRESHOLD_USED], results[ID], results[CATKEY], results[EXPECTED_CATKEY])
+            print tup
+    return result_dict
 
 def saveToFile(name, list):
     if not os.path.exists(directory):
@@ -26,6 +350,23 @@ def saveToFile(name, list):
         for item in list:
             f.write("%s" % item)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Split data from input folder to subfolders based on categorykeys
 def processInput(inputFolder):
     d = {}
     if os.path.exists(directory):
@@ -81,25 +422,7 @@ def readJson(jsonFile):
 #            d.append(json.loads(line))
     return d;
 
-def shingling(text, shingleLength):
-    tokens_desc = [text[i:i+shingleLength] for i in range(len(text) - shingleLength + 1) if len(text[i]) < shingleLength + 1]
-    return tokens_desc
 
-def getSet(d):
-    hash_set = set()
-    shingleLength = 7
-    for i in range(0,len(d)):
-        tokens = []
-        if "ad__headline" in d[i].keys():
-            tokens = shingling(d[i]["ad__headline"], shingleLength)
-        if "ad__description" in d[i].keys():
-            tokens += shingling(d[i]["ad__description"], shingleLength)
-        hashes = [hash(token) & 0xffffffff for token in tokens]
-        hash_set.update(hashes)
-    return hash_set
-
-def jac(set1, set2):
-    return float(len(set1 & set2)) / len(set1 | set2)
 
 def readAllInput(mypath):
     output = {}
@@ -195,6 +518,7 @@ def readAllTestInput(mypath):
 
 def processTestInput(categoriesTrain):
     testData = readAllTestInput(TEST_DIR)
+    summaries = {}
     for item in testData.items():
         print "processing input " + item[0]
         categoriesTest = {}
@@ -202,7 +526,10 @@ def processTestInput(categoriesTrain):
             categoriesTest[cat[0]] = readJson(cat[1])
         #for cat in categoriesTest.items():
         #    print cat[0], len(cat[1])
-        crossCategoryTest(categoriesTest, categoriesTrain)
+        summary = crossCategoryTest(categoriesTest, categoriesTrain)
+        summaries[item[0]] = summary
+    for key in sorted(summaries.iterkeys()):
+        print ("%30s %s" % (key, summaries[key]))
 
 def categories(inputDir):
     inp = readAllInput(inputDir)
@@ -211,6 +538,16 @@ def categories(inputDir):
         print "processing category " + item[0]
         categories[item[0]] = readJson(item[1])
     return categories
+
+def getSomeSources():
+    sources = []
+    d = readJson("data/autos.txt")
+    s = set()
+    for item in d:
+        s.add(item["sourcename"])
+    sources = [source for source in s]
+    return sources[0:30]
+
 
 def doTest(testLists):
     testSet = testLists[1]
@@ -236,23 +573,30 @@ def doTest(testLists):
         maxSim = sum/len(trainSets)
 
         if maxSim > maxOverallSim:
-            print "    better category is " + trainCategory + " with sim " + "%f" % (maxSim)
+            # print "    better category is " + trainCategory + " with sim " + "%f" % (maxSim)
             maxOverallSim = maxSim
             bestCategory = trainCategory
-        if (testCategory == trainCategory):
-            print "    score for this category is " + "%f" % (maxSim)
+        #if (testCategory == trainCategory):
+        #   print "    score for this category is " + "%f" % (maxSim)
         #print "sim for category %s is %s with similarity %f" % (testLists[0], trainCategory, maxSim)
     resultString = "most similar category for category %s is %s with similarity %f" % (testCategory, bestCategory, maxOverallSim)
     prefix = ""
+
+    returnValue = 0
     if (testCategory == bestCategory):
         prefix = "EQUAL "
+        returnValue = 1
     print prefix + resultString
+    return returnValue
 
 def crossCategoryTest(categoriesTest, categoriesTrain):
-    sizeLimit = 2
+    sizeLimit = 5
     maxTrainSets = 10
     maxTestSetSize = 200
     tuples = []
+
+    counterOfAll = 0
+    counterOfEqual = 0
     for item1 in categoriesTest.items():
         if (len(item1[1]) < sizeLimit):
             continue
@@ -271,11 +615,29 @@ def crossCategoryTest(categoriesTest, categoriesTrain):
         tupl[0] = testCategory
         tupl[1] = testSet
         tupl[2] = trainCategories
-        doTest(tupl)
+        areEqual = doTest(tupl)
+        counterOfAll += 1
+        counterOfEqual += areEqual
+    summary = "equal count %3d out of %3d test set size %3d" % (counterOfEqual, counterOfAll, testSetAdsCount)
+    return summary
 
-processTestInput(categories(TRAIN_DIR))
-#processInput("de")
-#createTrainTest(getTestSources())
+
+
+##############################################
+#processInput("vn")
+#createTrainTest(["nhaban_vn","nhadat24h_net","chosaigon_com"])
+#processTestInput(categories(TRAIN_DIR))
+
+##############################################
+#processInput("australia1000")
+#createTrainTest(["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"])
+#processTestInput(categories(TRAIN_DIR))
+
+#splitInput("australia1000")
+trainSourcenames = ["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"]
+#splitToTrainTest("australia1000", trainSourcenames)
+getTestTrainResults("australia1000", THRESHOLD_LIST, trainSourcenames)
+
 
 #bigTestSet()
 #computation()
