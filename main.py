@@ -42,8 +42,8 @@ SHINGLE_SIZE = 7
 #THRESHOLD_LIST = [10, 50]
 THRESHOLD_USED = "threshold_used"
 #THRESHOLD_LIST = [1, 5, 10, 50, 100, 500]
-THRESHOLD_LIST = [30]
-#THRESHOLD_LIST = [2, 5, 10, 20, 50,100, 200, 500]
+#THRESHOLD_LIST = [3, 30, 300]
+THRESHOLD_LIST = [2, 5, 10, 20, 50,100, 200, 500, 1000]
 
 # Returns processed folder
 def getProcessedFolder(inputFolder):
@@ -240,16 +240,17 @@ def shingling(text, shingleLength):
     tokens_desc = [text[i:i+shingleLength] for i in range(len(text) - shingleLength + 1) if len(text[i]) < shingleLength + 1]
     return tokens_desc
 
-# get set of shingles coded to integers
+# Get set of shingles coded to integers
+# Removes blank characters
 def getSet(d):
     hash_set = set()
     shingleLength = SHINGLE_SIZE
     for i in range(0,len(d)):
         tokens = []
         if "ad__headline" in d[i].keys():
-            tokens = shingling(d[i]["ad__headline"], shingleLength)
+            tokens = shingling(d[i]["ad__headline"].strip(), shingleLength)
         if "ad__description" in d[i].keys():
-            tokens += shingling(d[i]["ad__description"], shingleLength)
+            tokens += shingling(d[i]["ad__description"].strip(), shingleLength)
         hashes = [hash(token) & 0xffffffff for token in tokens]
         hash_set.update(hashes)
     return hash_set
@@ -308,8 +309,11 @@ def getTestTrainResults(inputFolder, thresholdsList, trainSourcenames):
                 #tup = (trainItem[0], 0);
                 #scores.append(tup)
                 continue
-            trainSets = trainItem[1][maxThreshold]
-            testSets = thresholds[maxThreshold]
+            #trainSets = trainItem[1][maxThreshold]
+            #testSets = thresholds[maxThreshold]
+            maxThreshold = min(max(trainItem[1].keys()), max(thresholds.keys()))
+            trainSets = trainItem[1][max(trainItem[1].keys())]
+            testSets = thresholds[max(thresholds.keys())]
             score = getScore(trainSets, testSets)
             tup = (trainItem[0], score, maxThreshold);
             scores.append(tup)
@@ -633,9 +637,9 @@ def crossCategoryTest(categoriesTest, categoriesTrain):
 #createTrainTest(["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"])
 #processTestInput(categories(TRAIN_DIR))
 
-#splitInput("australia1000")
+splitInput("australia1000")
 trainSourcenames = ["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"]
-#splitToTrainTest("australia1000", trainSourcenames)
+splitToTrainTest("australia1000", trainSourcenames)
 getTestTrainResults("australia1000", THRESHOLD_LIST, trainSourcenames)
 
 
