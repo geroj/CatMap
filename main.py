@@ -38,12 +38,13 @@ TOP_RESULTS = "top_results"
 PROCESSED_SUFFIX = "_processed"
 TRAINTEST_SUFFIX = "_traintest"
 MAX_TRAIN_SET = 5
-SHINGLE_SIZE = 7
+SHINGLE_SIZE = 8
 #THRESHOLD_LIST = [10, 50]
 THRESHOLD_USED = "threshold_used"
 #THRESHOLD_LIST = [1, 5, 10, 50, 100, 500]
 #THRESHOLD_LIST = [3, 30, 300]
-THRESHOLD_LIST = [2, 5, 10, 20, 50,100, 200, 500, 1000]
+#THRESHOLD_LIST = [2, 5, 10, 20, 50,100, 200, 500, 1000]
+THRESHOLD_LIST = [10, 20, 50,100, 200]
 
 # Returns processed folder
 def getProcessedFolder(inputFolder):
@@ -138,6 +139,13 @@ def getIdsDict(inputFolder):
     with open(idsFile, 'r') as f:
         return json.loads(f.read())
 
+# Check if candidate any trainsources is substring of candidate
+def isTrainSourceName(candidate, trainSourcenames):
+    for trainSource in trainSourcenames:
+        if candidate.startswith(trainSource):
+            return True
+    return False
+
 # Split processed dataset to train and test set
 # testSourcenames contains list of sources, which data are used for training
 def splitToTrainTest(inputFolder, trainSourcenames):
@@ -155,7 +163,8 @@ def splitToTrainTest(inputFolder, trainSourcenames):
         #print processedFolder + "/" + item[0] + ".txt"
         filename = item[0] + ".txt"
         filepath = processedFolder + "/" + filename
-        if item[1][SOURCENAME] in trainSourcenames:
+        #if item[1][SOURCENAME] in trainSourcenames:
+        if isTrainSourceName(item[1][SOURCENAME], trainSourcenames):
             processTrainFile(inputFolder, item[0], dct_id)
         else:
             dstFilepath = testFolder + "/" + filename
@@ -179,7 +188,8 @@ def getCategoriesDict(inputFolder, trainSourcenames):
     for item in dct_id.items():
         catkey = item[1][CATKEY]
         sourcename = item[1][SOURCENAME]
-        if sourcename in trainSourcenames:
+        #if sourcename in trainSourcenames:
+        if isTrainSourceName(sourcename, trainSourcenames):
             categories[catkey] = trainFolder + "/" + catkey + ".txt"
     return categories
 
@@ -191,7 +201,8 @@ def getTestFiles(inputFolder, trainSourcenames):
     for item in dct_id.items():
         uid = item[0]
         sourcename = item[1][SOURCENAME]
-        if not sourcename in trainSourcenames:
+        #if not sourcename in trainSourcenames:
+        if not isTrainSourceName(sourcename, trainSourcenames):
             testFiles[uid] = testFolder + "/" + uid + ".txt"
     return testFiles
 
@@ -237,7 +248,7 @@ def chooseMaxThresholdSize(list1, list2):
 
 # Returns shingles of desired size
 def shingling(text, shingleLength):
-    tokens_desc = [text[i:i+shingleLength] for i in range(len(text) - shingleLength + 1) if len(text[i]) < shingleLength + 1]
+    tokens_desc = [text[i:i+shingleLength] for i in                                                                                                                                                                                                                                                                                                                                                                                    range(len(text) - shingleLength + 1) if len(text[i]) < shingleLength + 1]
     return tokens_desc
 
 # Get set of shingles coded to integers
@@ -248,9 +259,9 @@ def getSet(d):
     for i in range(0,len(d)):
         tokens = []
         if "ad__headline" in d[i].keys():
-            tokens = shingling(d[i]["ad__headline"].strip(), shingleLength)
+            tokens = shingling(d[i]["ad__headline"], shingleLength)
         if "ad__description" in d[i].keys():
-            tokens += shingling(d[i]["ad__description"].strip(), shingleLength)
+            tokens += shingling(d[i]["ad__description"], shingleLength)
         hashes = [hash(token) & 0xffffffff for token in tokens]
         hash_set.update(hashes)
     return hash_set
@@ -309,11 +320,17 @@ def getTestTrainResults(inputFolder, thresholdsList, trainSourcenames):
                 #tup = (trainItem[0], 0);
                 #scores.append(tup)
                 continue
-            #trainSets = trainItem[1][maxThreshold]
-            #testSets = thresholds[maxThreshold]
-            maxThreshold = min(max(trainItem[1].keys()), max(thresholds.keys()))
-            trainSets = trainItem[1][max(trainItem[1].keys())]
-            testSets = thresholds[max(thresholds.keys())]
+            # METHOD 1
+            trainSets = trainItem[1][maxThreshold]
+            testSets = thresholds[maxThreshold]
+            # METHOD 2
+            # maxThreshold = min(max(trainItem[1].keys()), max(thresholds.keys()))
+            # trainSets = trainItem[1][max(trainItem[1].keys())]
+            # testSets = thresholds[max(thresholds.keys())]
+            # METHOD 3
+            #trainSets = trainItem[1][min(200, max(trainItem[1].keys()))]
+            #testSets = thresholds[min(50, maxThreshold)]
+
             score = getScore(trainSets, testSets)
             tup = (trainItem[0], score, maxThreshold);
             scores.append(tup)
@@ -625,24 +642,20 @@ def crossCategoryTest(categoriesTest, categoriesTrain):
     summary = "equal count %3d out of %3d test set size %3d" % (counterOfEqual, counterOfAll, testSetAdsCount)
     return summary
 
+#databaseId = "australia1000_ver3"
+#splitInput(databaseId)
+#trainSourcenames = ["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"]
+#splitToTrainTest(databaseId, trainSourcenames)
+#getTestTrainResults(databaseId, THRESHOLD_LIST, trainSourcenames)
 
+#databaseId = "germany1000_ver3"
+#splitInput(databaseId)
+#trainSourcenames = ["stadtlist_de","kleinanzeigen_de","kalaydo_de","quoka_de","dhd24_com","locanto_de"]
+#splitToTrainTest(databaseId, trainSourcenames)
+#getTestTrainResults(databaseId, THRESHOLD_LIST, trainSourcenames)
 
-##############################################
-#processInput("vn")
-#createTrainTest(["nhaban_vn","nhadat24h_net","chosaigon_com"])
-#processTestInput(categories(TRAIN_DIR))
-
-##############################################
-#processInput("australia1000")
-#createTrainTest(["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"])
-#processTestInput(categories(TRAIN_DIR))
-
-splitInput("australia1000")
-trainSourcenames = ["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au"]
-splitToTrainTest("australia1000", trainSourcenames)
-getTestTrainResults("australia1000", THRESHOLD_LIST, trainSourcenames)
-
-
-#bigTestSet()
-#computation()
-#processInput()
+databaseId = "australia1000_ver4"
+splitInput(databaseId)
+trainSourcenames = ["australia_global-free-classified-ads_com","quicksales_com_au","cracker_com_au","localclassifieds_com_au","truebuy_com_au","newsclassifieds_com_au","gumtree_com_au michaelpage_com_au","gumtree_com_au","michaelpage_com_au"]
+splitToTrainTest(databaseId, trainSourcenames)
+getTestTrainResults(databaseId, THRESHOLD_LIST, trainSourcenames)
